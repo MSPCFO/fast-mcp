@@ -36,6 +36,12 @@ module FastMcp
       end
 
       def valid_token?(token)
+        # A callable auth_token acts as a per-request verifier: it receives the
+        # extracted token and returns truthy to allow the request. This lets a
+        # host app validate tokens dynamically (e.g. against an OAuth provider)
+        # rather than comparing against a static value.
+        return !!@auth_token.call(token) if @auth_token.respond_to?(:call)
+
         token == @auth_token
       end
 

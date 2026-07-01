@@ -273,6 +273,67 @@ RSpec.describe FastMcp::Transports::AuthenticatedRackTransport do
       end
     end
 
+    context 'with a callable auth_token (per-request verifier)' do
+      # The verifier receives the extracted token and returns truthy to allow the
+      # request or falsy to reject it. This lets a host app validate tokens
+      # dynamically (e.g. against an OAuth provider) instead of a static string.
+      let(:verified_tokens) { ['oauth-token-abc'] }
+      let(:auth_token) { ->(token) { verified_tokens.include?(token) } }
+
+      it 'enables authentication when a callable is provided' do
+        expect(transport.instance_variable_get(:@auth_enabled)).to be(true)
+      end
+
+      it 'passes MCP requests through when the verifier accepts the token' do
+        env = {
+          'PATH_INFO' => '/mcp/messages',
+          'REQUEST_METHOD' => 'POST',
+          'HTTP_AUTHORIZATION' => 'Bearer oauth-token-abc',
+          'REMOTE_ADDR' => '127.0.0.1',
+          'rack.input' => StringIO.new('{"jsonrpc":"2.0","method":"test","id":1}')
+        }
+
+        result = transport.call(env)
+        expect(result[0]).to eq(200)
+      end
+
+      it 'returns 401 when the verifier rejects the token' do
+        env = {
+          'PATH_INFO' => '/mcp/messages',
+          'REQUEST_METHOD' => 'POST',
+          'HTTP_AUTHORIZATION' => 'Bearer not-a-known-token',
+          'rack.input' => StringIO.new('{"jsonrpc":"2.0","method":"test","id":1}')
+        }
+
+        result = transport.call(env)
+        expect(result[0]).to eq(401)
+
+        response = JSON.parse(result[2].first)
+        expect(response['error']['code']).to eq(-32_000)
+        expect(response['error']['message']).to include('Unauthorized')
+      end
+
+      it 'calls the verifier with the extracted token (Bearer prefix stripped)' do
+        received = nil
+        verifier = lambda do |token|
+          received = token
+          true
+        end
+        transport = described_class.new(app, server, logger: logger, auth_token: verifier)
+
+        env = {
+          'PATH_INFO' => '/mcp/messages',
+          'REQUEST_METHOD' => 'POST',
+          'HTTP_AUTHORIZATION' => 'Bearer oauth-token-abc',
+          'REMOTE_ADDR' => '127.0.0.1',
+          'rack.input' => StringIO.new('{"jsonrpc":"2.0","method":"test","id":1}')
+        }
+
+        transport.call(env)
+        expect(received).to eq('oauth-token-abc')
+      end
+    end
+
     context 'with authentication disabled' do
       let(:transport) { described_class.new(app, server,logger: logger) }
 
